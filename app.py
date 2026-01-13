@@ -6,7 +6,6 @@ import altair as alt
 from providers import fetch_road_routes, build_rail_routes, build_flight_routes
 from optimization import road_cost_emissions, score_df
 from map_utils import draw_map
-from geometry_utils import haversine_km
 
 st.set_page_config(page_title="Multi‑Modal (Road + Rail + Flight) Route Optimizer", layout="wide")
 
@@ -17,7 +16,7 @@ if css_path.exists():
     st.markdown(f"<style>{css_path.read_text()}</style>", unsafe_allow_html=True)
 
 st.markdown('<div class="header-gradient">🧭 Multi‑Modal Route Optimizer</div>', unsafe_allow_html=True)
-st.caption("Road, Rail, Flight — 3 alternatives per mode. Recommended path highlighted.")
+st.caption("Road, Rail, Flight — choose 3–4 alternatives per mode. Recommended path highlighted.")
 
 # Sidebar inputs
 st.sidebar.header("Configuration")
@@ -61,10 +60,10 @@ weights = {
     'emissions_kg': st.sidebar.slider("CO₂", 0.0, 3.0, 1.0),
 }
 
-st.sidebar.subheader("Modes")
-mode_select = st.sidebar.multiselect("Modes to include", ["road","rail","flight"], default=["road","rail","flight"])
+st.sidebar.subheader("Modes & Alternatives")
+mode_select = st.sidebar.multiselect("Modes", ["road","rail","flight"], default=["road","rail","flight"])
 avoid_tolls = st.sidebar.checkbox("Road: avoid tollways", value=False)
-alt_count = st.sidebar.slider("Road alternatives (target)", 1, 5, 3)
+alt_target = st.sidebar.slider("Alternatives per mode", 3, 4, 4)
 
 ORS_API_KEY = st.secrets.get("ORS_API_KEY", "")
 
@@ -81,8 +80,7 @@ if run:
         else:
             all_routes = []
             if 'road' in mode_select:
-                road_routes = fetch_road_routes(origin, dest, alt_count, ORS_API_KEY, avoid_tolls)
-                # compute KPIs
+                road_routes = fetch_road_routes(origin, dest, alt_target, ORS_API_KEY, avoid_tolls)
                 for r in road_routes:
                     cost_inr, emissions_kg = road_cost_emissions(r.get('distance_km',0.0), fuel_economy, fuel_price, co2_g_per_km)
                     r['cost_inr'] = cost_inr
@@ -90,15 +88,14 @@ if run:
                     r['mode'] = 'road'
                 all_routes.extend(road_routes)
             if 'rail' in mode_select:
-                all_routes.extend(build_rail_routes(origin, dest))
+                all_routes.extend(build_rail_routes(origin, dest, alt_target=alt_target))
             if 'flight' in mode_select:
-                all_routes.extend(build_flight_routes(origin, dest))
+                all_routes.extend(build_flight_routes(origin, dest, alt_target=alt_target))
 
             if not all_routes:
                 st.session_state.message = "No routes found/built. Try different points or modes."
                 st.session_state.routes = None
             else:
-                # Build dataframe
                 rows = []
                 for i, r in enumerate(all_routes):
                     rows.append({
