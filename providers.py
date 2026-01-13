@@ -1,8 +1,9 @@
 import requests
 from typing import List, Dict, Any, Tuple
 from geometry_utils import haversine_km
+from optimization import rail_kpis, flight_kpis
 
-# OSRM public demo server (no key)
+# OSRM public demo server
 OSRM_URL = 'https://router.project-osrm.org/route/v1/driving/{coords}?alternatives=true&overview=full&steps=true'
 
 class ORSClient:
@@ -31,7 +32,6 @@ class ORSClient:
             return {'error': f'ORS network error: {e}'}
         if resp.ok:
             return resp.json()
-        # fallback fastest when alt limit triggers
         if resp.status_code == 400 and use_alts:
             body['alternative_routes'] = None
             body['preference'] = 'fastest'
@@ -48,28 +48,26 @@ class ORSClient:
         return {'error': f'ORS HTTP {resp.status_code}: {msg}'}
 
     @staticmethod
-    def parse(resp: Dict[str,Any]) -> List[Dict[str,Any]]:
+    def parse(resp: Dict[str,Any], alt_target:int=4) -> List[Dict[str,Any]]:
         if not isinstance(resp, dict) or resp.get('error'):
             return []
         routes = []
         if 'features' in resp:
-            for feat in resp.get('features', []):
+            for feat in resp.get('features', [])[:alt_target]:
                 props = feat.get('properties', {})
                 segs = props.get('segments', [])
-                steps_all = []
-                road_names = []
+                steps_all, road_names = [], []
                 for seg in segs:
                     for s in seg.get('steps', []):
                         nm = s.get('name') or s.get('instruction')
                         if nm and nm != '-': road_names.append(nm)
                         steps_all.append({'name': s.get('name'), 'instruction': s.get('instruction'),
                                           'distance_m': s.get('distance',0), 'duration_s': s.get('duration',0)})
-                # summarize unique first 8
                 seen, summary = set(), []
                 for nm in road_names:
                     if nm not in seen:
                         summary.append(nm); seen.add(nm)
-                    if len(summary) >= 8: break
+                    if len(summary) >= 10: break
                 routes.append({
                     'mode':'road',
                     'distance_km': props.get('summary',{}).get('distance',0)/1000.0,
@@ -94,20 +92,17 @@ class OSRMClient:
             return {'error': f'OSRM network error: {e}'}
 
     @staticmethod
-    def parse(resp: Dict[str,Any]) -> List[Dict[str,Any]]:
+    def parse(resp: Dict[str,Any], alt_target:int=4) -> List[Dict[str,Any]]:
         if not isinstance(resp, dict) or resp.get('error'):
             return []
         routes = []
-        for r in resp.get('routes', [])[:3]:
+        for r in resp.get('routes', [])[:alt_target]:
             distance_km = r.get('distance',0)/1000.0
             duration_min = r.get('duration',0)/60.0
-            coords = []
-            # geometry is polyline; decode using OSRM polyline (5 precision)
+            coords, steps_all, road_names = [], [], []
             poly = r.get('geometry')
             if isinstance(poly, str):
                 coords = OSRMClient._decode_polyline5(poly)
-            steps_all = []
-            road_names = []
             for leg in r.get('legs', []):
                 for s in leg.get('steps', []):
                     nm = s.get('name') or s.get('ref') or s.get('mode')
@@ -118,7 +113,7 @@ class OSRMClient:
             for nm in road_names:
                 if nm not in seen:
                     summary.append(nm); seen.add(nm)
-                if len(summary) >= 8: break
+                if len(summary) >= 10: break
             routes.append({
                 'mode':'road',
                 'distance_km': distance_km,
@@ -177,7 +172,7 @@ AIR_HUBS = {
 }
 
 
-def _nearest_hubs(point: Tuple[float,float], hubs: Dict[str,Tuple[float,float]], topn=3):
+def _nearest_hubs(point: Tuple[float,float], hubs: Dict[str,Tuple[float,float]], topn=4):
     dlist = []
     for name, coord in hubs.items():
         d = haversine_km(point, coord)
@@ -186,20 +181,17 @@ def _nearest_hubs(point: Tuple[float,float], hubs: Dict[str,Tuple[float,float]],
     return dlist[:topn]
 
 
-def build_rail_routes(origin, dest) -> List[Dict[str,Any]]:
-    # 3 alternatives: choose top 3 mid hubs by combined origin+dest distance
-    origin_near = _nearest_hubs(origin, RAIL_HUBS, topn=3)
-    dest_near = _nearest_hubs(dest, RAIL_HUBS, topn=3)
+def build_rail_routes(origin, dest, alt_target:int=4) -> List[Dict[str,Any]]:
+    origin_near = _nearest_hubs(origin, RAIL_HUBS, topn=alt_target)
+    dest_near = _nearest_hubs(dest, RAIL_HUBS, topn=alt_target)
     candidates = []
     for on in origin_near:
         for dn in dest_near:
-            mid = (on[0], on[1])  # use origin-side hub; second leg to dest-side hub
             total = on[2] + dn[2]
             candidates.append((on[0], on[1], dn[0], dn[1], total))
     candidates.sort(key=lambda x: x[4])
     routes = []
-    for i, (on_name, on_coord, dn_name, dn_coord, _) in enumerate(candidates[:3]):
-        # 3-segment straight lines for visualization
+    for i, (on_name, on_coord, dn_name, dn_coord, _) in enumerate(candidates[:alt_target]):
         coords = [origin, on_coord, dn_coord, dest]
         seg_d = haversine_km(origin, on_coord) + haversine_km(on_coord, dn_coord) + haversine_km(dn_coord, dest)
         duration_min, cost_inr, emissions_kg = rail_kpis(seg_d)
@@ -220,9 +212,9 @@ def build_rail_routes(origin, dest) -> List[Dict[str,Any]]:
     return routes
 
 
-def build_flight_routes(origin, dest) -> List[Dict[str,Any]]:
-    origin_near = _nearest_hubs(origin, AIR_HUBS, topn=3)
-    dest_near = _nearest_hubs(dest, AIR_HUBS, topn=3)
+def build_flight_routes(origin, dest, alt_target:int=4) -> List[Dict[str,Any]]:
+    origin_near = _nearest_hubs(origin, AIR_HUBS, topn=alt_target)
+    dest_near = _nearest_hubs(dest, AIR_HUBS, topn=alt_target)
     candidates = []
     for on in origin_near:
         for dn in dest_near:
@@ -230,7 +222,7 @@ def build_flight_routes(origin, dest) -> List[Dict[str,Any]]:
             candidates.append((on[0], on[1], dn[0], dn[1], total))
     candidates.sort(key=lambda x: x[4])
     routes = []
-    for i, (on_name, on_coord, dn_name, dn_coord, _) in enumerate(candidates[:3]):
+    for i, (on_name, on_coord, dn_name, dn_coord, _) in enumerate(candidates[:alt_target]):
         coords = [origin, on_coord, dn_coord, dest]
         seg_d = haversine_km(origin, on_coord) + haversine_km(on_coord, dn_coord) + haversine_km(dn_coord, dest)
         duration_min, cost_inr, emissions_kg = flight_kpis(seg_d)
@@ -251,15 +243,13 @@ def build_flight_routes(origin, dest) -> List[Dict[str,Any]]:
     return routes
 
 
-def fetch_road_routes(origin, dest, alt_count, ors_api_key:str, avoid_tolls=False) -> List[Dict[str,Any]]:
-    # Try ORS first; if <=1 route or long, augment with OSRM to ensure up to 3 alternatives
+def fetch_road_routes(origin, dest, alt_target:int, ors_api_key:str, avoid_tolls=False) -> List[Dict[str,Any]]:
     routes: List[Dict[str,Any]] = []
     if ors_api_key:
         ors = ORSClient(ors_api_key)
-        r = ors.fetch(origin, dest, alt_count, avoid_tolls)
-        routes.extend(ORSClient.parse(r))
-    if len(routes) < 3:
+        r = ors.fetch(origin, dest, alt_target, avoid_tolls)
+        routes.extend(ORSClient.parse(r, alt_target=alt_target))
+    if len(routes) < alt_target:
         osrm = OSRMClient.fetch(origin, dest)
-        routes.extend(OSRMClient.parse(osrm))
-    # Limit to 3
-    return routes[:3]
+        routes.extend(OSRMClient.parse(osrm, alt_target=alt_target))
+    return routes[:alt_target]
