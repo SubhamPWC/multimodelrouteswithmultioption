@@ -4,16 +4,12 @@ from streamlit_folium import st_folium
 # Per-mode colors
 COLORS = {
     'road_rec': '#3b82f6',
-    'road_alt': ['#22d3ee', '#a78bfa', '#10b981'],
+    'road_alt': ['#22d3ee', '#a78bfa', '#10b981', '#f59e0b'],
     'rail_rec': '#ef4444',
-    'rail_alt': ['#f59e0b', '#fb7185', '#f97316'],
+    'rail_alt': ['#f59e0b', '#fb7185', '#f97316', '#eab308'],
     'flight_rec': '#8b5cf6',
-    'flight_alt': ['#60a5fa', '#14b8a6', '#eab308'],
+    'flight_alt': ['#60a5fa', '#14b8a6', '#eab308', '#22d3ee'],
 }
-
-
-def _polyline(coords, color, weight, opacity):
-    folium.PolyLine(locations=coords, color=color, weight=weight, opacity=opacity)
 
 
 def draw_map(origin, dest, routes, rec_idx: int):
@@ -27,17 +23,15 @@ def draw_map(origin, dest, routes, rec_idx: int):
         mode = r.get('mode', 'road')
         rec = (idx == rec_idx)
         color = COLORS[f'{mode}_rec'] if rec else COLORS[f'{mode}_alt'][idx % len(COLORS[f'{mode}_alt'])]
-        weight = 9 if rec else 6
+        weight = 10 if rec else 6
         tooltip = f"{mode.title()} • {'Recommended' if rec else 'Alternative'} #{idx} • {r.get('distance_km',0):.1f} km, {r.get('duration_min',0):.1f} min"
 
         coords = r.get('coords_latlon', [])
         if coords:
-            # Shadow for recommended
             if rec:
                 folium.PolyLine(coords, color='#000000', weight=14, opacity=0.35).add_to(m)
             folium.PolyLine(coords, color=color, weight=weight, opacity=0.98, tooltip=tooltip).add_to(m)
         else:
-            # If geometry is GeoJSON LineString (lon,lat), convert
             geom = r.get('geometry')
             if isinstance(geom, dict) and geom.get('type') == 'LineString':
                 coords = [(lat, lon) for lon, lat in geom.get('coordinates', [])]
