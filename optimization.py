@@ -10,13 +10,13 @@ def road_cost_emissions(distance_km: float, fuel_economy_kmpl: float, fuel_price
     emissions_kg = (co2_g_per_km * max(distance_km, 0.0)) / 1000.0
     return round(cost_inr, 2), round(emissions_kg, 3)
 
-# Simple rail/flight models (tunable)
+# Rail/Flight KPI models
 RAIL_SPEED_KMPH = 70.0
-RAIL_COST_PER_KM = 0.8   # ₹/km
+RAIL_COST_PER_KM = 0.8
 RAIL_CO2_G_PER_KM = 30.0
 
 FLIGHT_SPEED_KMPH = 650.0
-FLIGHT_COST_PER_KM = 6.0  # ₹/km approx
+FLIGHT_COST_PER_KM = 6.0
 FLIGHT_CO2_G_PER_KM = 120.0
 
 
